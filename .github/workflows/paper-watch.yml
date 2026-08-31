@@ -1,4 +1,4 @@
-name: Vigilancia semanal de papers
+name:  .github/workflows/paper-watch.yml
 
 on:
   schedule:
