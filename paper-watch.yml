@@ -1,0 +1,28 @@
+name: Vigilancia semanal de papers
+
+on:
+  schedule:
+    # Todos los lunes 9:00 UTC (~6am Argentina). Ajustá el cron si preferís otro día/hora.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {} # permite correrlo a mano desde la pestaña Actions, para probar
+
+jobs:
+  buscar-papers:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ejecutar el agente
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/paper_watch.py
