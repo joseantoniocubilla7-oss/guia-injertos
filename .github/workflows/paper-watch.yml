@@ -1,4 +1,5 @@
-name:  Vigilancia semanal de papers
+name: Vigilancia semanal de papers
+
 on:
   schedule:
     # Todos los lunes 9:00 UTC (~6am Argentina). Ajustá el cron si preferís otro día/hora.
