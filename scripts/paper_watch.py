@@ -35,13 +35,31 @@ SEARCH_TERMS = [
     "remnant preservation ACL",
 ]
 
+# Autores a seguir de cerca: se buscan TODOS sus artículos nuevos en PubMed,
+# sin importar el tema (a diferencia de SEARCH_TERMS, que busca por tema
+# sin importar el autor). Formato PubMed: "Apellido Iniciales[Author]".
+AUTHOR_SEARCHES = [
+    # Equipo propio / región
+    'Alvarez-Salinas E[Author]',
+    'Canuto SMG[Author]',
+    'Helito CP[Author]',  # Camilo Helito (Brasil) — InternalBrace, isquiotibiales
+    # Referentes internacionales — cada uno referente en su sub-especialidad
+    'LaPrade RF[Author]',        # Colateral externo / esquina posterolateral, MCL
+    'Sonnery-Cottet B[Author]',  # LCA, refuerzo extra-articular (Lemaire/LET)
+    'Musahl V[Author]',          # Biomecánica de LCA, rotación
+    'Getgood A[Author]',         # LCA + LET (estudio STABILITY)
+    'Siebold R[Author]',         # LCP, técnicas de doble haz
+    'Zaffagnini S[Author]',      # LCA/LCP, cinemática de rodilla
+]
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY")  # "owner/repo"
 
 
 def pubmed_search(term, days_back=8):
-    """Busca IDs de artículos publicados en los últimos N días para un término."""
+    """Busca IDs de artículos publicados en los últimos N días para un término
+    o una búsqueda de autor (ej: 'Canuto SMG[Author]')."""
     params = {
         "db": "pubmed",
         "term": f"{term} AND (\"last {days_back} days\"[dp])",
@@ -135,6 +153,8 @@ def create_github_issue(drafts):
     ]
     for d in drafts:
         body_lines.append(f"## {d['titulo_original']}")
+        if d.get("fuente"):
+            body_lines.append(f"- **⭐ {d['fuente']}**")
         body_lines.append(f"- **Revista:** {d['revista']} ({d['fecha']})")
         body_lines.append(f"- **Link:** {d['url']}")
         body_lines.append(f"- **Resumen borrador:** {d['resumen_borrador']}")
@@ -167,7 +187,7 @@ def main():
 
     for term in SEARCH_TERMS:
         try:
-            ids = pubmed_search(term)
+            ids = pubmed_search(term, days_back=8)
         except Exception as e:
             print(f"Error buscando '{term}': {e}")
             continue
@@ -182,6 +202,27 @@ def main():
             except Exception as e:
                 print(f"Error procesando PMID {pmid}: {e}")
             time.sleep(0.5)  # respetar rate limits de PubMed
+
+    # Búsqueda por autor: plazo más amplio (30 días) porque publican con
+    # menos frecuencia que "todo lo nuevo sobre LCA en general".
+    for author_term in AUTHOR_SEARCHES:
+        try:
+            ids = pubmed_search(author_term, days_back=30)
+        except Exception as e:
+            print(f"Error buscando autor '{author_term}': {e}")
+            continue
+
+        for pmid in ids:
+            if pmid in seen_pmids:
+                continue
+            seen_pmids.add(pmid)
+            try:
+                article = pubmed_summary(pmid)
+                article["fuente"] = f"Autor seguido: {author_term}"
+                drafts.append(draft_with_claude(article))
+            except Exception as e:
+                print(f"Error procesando PMID {pmid}: {e}")
+            time.sleep(0.5)
 
     create_github_issue(drafts)
 
