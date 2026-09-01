@@ -3,26 +3,24 @@
 Agente semanal de vigilancia de literatura para guiadeinjertos.com
 
 Qué hace:
-1. Busca en PubMed artículos publicados en los últimos 8 días sobre los temas
-   de la app (LCA, LCP, colateral interno/externo, técnicas de injerto).
-2. Para cada artículo nuevo, pide a Claude que arme un resumen en español
-   siguiendo el mismo formato que usa el array PAPERS de la app.
-3. Crea un GitHub Issue con los borradores para que José los revise.
+1. Busca en PubMed artículos nuevos por tema y por autores seguidos.
+2. Para cada uno, pide a Claude un borrador estructurado (título en español,
+   resumen, tags) en el mismo formato que usa el array PAPERS de la app.
+3. Crea UN GitHub Issue POR PAPER, con los datos en un bloque JSON oculto.
 
-Nada se publica automáticamente. El resultado es SIEMPRE un borrador
-para revisión humana.
+Nada se publica solo. Recién cuando José comenta "ok" en un Issue,
+el workflow aprobar-paper.yml toma ese paper puntual y lo agrega a la app.
 """
 
 import os
 import json
 import time
+import re
 import urllib.request
 import urllib.parse
 
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-# Términos de búsqueda: uno por tema de la app. Ajustá esta lista cuando
-# quieras que el agente cubra más o menos temas.
 SEARCH_TERMS = [
     "ACL graft diameter",
     "ACL reconstruction technique",
@@ -35,31 +33,24 @@ SEARCH_TERMS = [
     "remnant preservation ACL",
 ]
 
-# Autores a seguir de cerca: se buscan TODOS sus artículos nuevos en PubMed,
-# sin importar el tema (a diferencia de SEARCH_TERMS, que busca por tema
-# sin importar el autor). Formato PubMed: "Apellido Iniciales[Author]".
 AUTHOR_SEARCHES = [
-    # Equipo propio / región
     'Alvarez-Salinas E[Author]',
     'Canuto SMG[Author]',
-    'Helito CP[Author]',  # Camilo Helito (Brasil) — InternalBrace, isquiotibiales
-    # Referentes internacionales — cada uno referente en su sub-especialidad
-    'LaPrade RF[Author]',        # Colateral externo / esquina posterolateral, MCL
-    'Sonnery-Cottet B[Author]',  # LCA, refuerzo extra-articular (Lemaire/LET)
-    'Musahl V[Author]',          # Biomecánica de LCA, rotación
-    'Getgood A[Author]',         # LCA + LET (estudio STABILITY)
-    'Siebold R[Author]',         # LCP, técnicas de doble haz
-    'Zaffagnini S[Author]',      # LCA/LCP, cinemática de rodilla
+    'Helito CP[Author]',
+    'LaPrade RF[Author]',
+    'Sonnery-Cottet B[Author]',
+    'Musahl V[Author]',
+    'Getgood A[Author]',
+    'Siebold R[Author]',
+    'Zaffagnini S[Author]',
 ]
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY")  # "owner/repo"
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY")
 
 
 def pubmed_search(term, days_back=8):
-    """Busca IDs de artículos publicados en los últimos N días para un término
-    o una búsqueda de autor (ej: 'Canuto SMG[Author]')."""
     params = {
         "db": "pubmed",
         "term": f"{term} AND (\"last {days_back} days\"[dp])",
@@ -73,7 +64,6 @@ def pubmed_search(term, days_back=8):
 
 
 def pubmed_summary(pmid):
-    """Trae título, revista y fecha de un artículo por su PMID."""
     params = {"db": "pubmed", "id": pmid, "retmode": "json"}
     url = f"{PUBMED_BASE}/esummary.fcgi?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(url) as resp:
@@ -89,34 +79,39 @@ def pubmed_summary(pmid):
 
 
 def draft_with_claude(article):
-    """Pide a Claude un resumen en español, en el formato de la app."""
+    """Pide a Claude un objeto JSON estructurado, listo para insertar en la app."""
+    fallback = {
+        "titulo": article["titulo_original"],
+        "resumen": "[Revisar manualmente: falta ANTHROPIC_API_KEY o hubo un error]",
+        "tags": [],
+    }
     if not ANTHROPIC_API_KEY:
-        # Sin API key configurada: devolvemos el dato crudo para revisión manual.
-        return {
-            **article,
-            "resumen_borrador": "[Falta ANTHROPIC_API_KEY — agregar resumen a mano]",
-        }
+        return {**article, **fallback}
 
-    prompt = f"""Este es un paper médico real de PubMed:
+    prompt = f"""Paper real de PubMed:
 
-Título: {article['titulo_original']}
+Título original: {article['titulo_original']}
 Revista: {article['revista']}
 Fecha: {article['fecha']}
 
-Tarea: escribí SOLO un resumen de 1-2 oraciones en español, tono técnico,
-para instrumentadores quirúrgicos y cirujanos ortopédicos de Latinoamérica.
-Enfocate en el hallazgo concreto y su implicancia práctica (un número, una
-indicación, un cambio de conducta). Si el abstract no está disponible y no
-podés inferir el hallazgo con confianza, respondé exactamente:
-"[Revisar manualmente: sin abstract disponible]"
+Devolvé SOLO un objeto JSON (sin markdown, sin explicación, sin ```), con
+estas claves exactas:
+- "titulo": el título adaptado al español, tono técnico, para instrumentadores
+  quirúrgicos y cirujanos ortopédicos de Latinoamérica. Podés reformular
+  para que suene natural, pero sin inventar hallazgos que no estén en el
+  título original.
+- "resumen": 1-2 oraciones en español con el hallazgo concreto y su
+  implicancia práctica. Si no podés inferir el hallazgo con confianza,
+  usá el texto exacto "[Revisar manualmente: sin abstract disponible]".
+- "tags": lista de 2-4 palabras clave en español en minúscula (ej:
+  ["LCA", "diámetro", "isquiotibiales"]).
 
-No inventes datos que no estén en el título. No agregues nada más que el
-resumen."""
+No inventes datos que no estén en el título. Respondé solo el JSON."""
 
     body = json.dumps(
         {
             "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 300,
+            "max_tokens": 400,
             "messages": [{"role": "user", "content": prompt}],
         }
     ).encode()
@@ -133,37 +128,53 @@ resumen."""
     try:
         with urllib.request.urlopen(req) as resp:
             result = json.loads(resp.read())
-        resumen = result["content"][0]["text"].strip()
+        raw = result["content"][0]["text"].strip()
+        raw = re.sub(r"^```json\s*|\s*```$", "", raw.strip())
+        parsed = json.loads(raw)
+        return {
+            **article,
+            "titulo": parsed.get("titulo", article["titulo_original"]),
+            "resumen": parsed.get("resumen", ""),
+            "tags": parsed.get("tags", []),
+        }
     except Exception as e:
-        resumen = f"[Error generando resumen: {e}]"
-
-    return {**article, "resumen_borrador": resumen}
+        return {**article, **fallback, "resumen": f"[Error generando resumen: {e}]"}
 
 
-def create_github_issue(drafts):
-    """Crea un Issue en el repo con todos los borradores de esta corrida."""
-    if not drafts:
-        print("Sin papers nuevos esta semana. No se crea Issue.")
-        return
+def create_issue_for_paper(paper, fuente_autor=None):
+    """Crea un Issue individual para un paper, con el JSON embebido para aprobación."""
+    paper_data = {
+        "titulo": paper["titulo"],
+        "revista": paper["revista"],
+        "fecha": paper["fecha"],
+        "tags": paper["tags"],
+        "resumen": paper["resumen"],
+        "nuevo": True,
+    }
 
-    body_lines = [
-        "Borradores generados automáticamente. **Nada se publicó** — revisá,",
-        "corregí y agregá manualmente los que valgan la pena al array PAPERS",
-        "de `App.jsx`.\n",
-    ]
-    for d in drafts:
-        body_lines.append(f"## {d['titulo_original']}")
-        if d.get("fuente"):
-            body_lines.append(f"- **⭐ {d['fuente']}**")
-        body_lines.append(f"- **Revista:** {d['revista']} ({d['fecha']})")
-        body_lines.append(f"- **Link:** {d['url']}")
-        body_lines.append(f"- **Resumen borrador:** {d['resumen_borrador']}")
-        body_lines.append("")
+    estrella = f"⭐ **Autor seguido: {fuente_autor}**\n\n" if fuente_autor else ""
+
+    body = f"""{estrella}**Título:** {paper['titulo']}
+**Revista:** {paper['revista']} ({paper['fecha']})
+**Link original:** {paper['url']}
+**Resumen:** {paper['resumen']}
+**Tags:** {', '.join(paper['tags'])}
+
+---
+Para aprobar y publicar este paper en la app automáticamente, comentá **ok**
+en este Issue. Para descartarlo, no hagas nada (o cerralo sin comentar).
+
+<!-- PAPER_DATA_START -->
+```json
+{json.dumps(paper_data, ensure_ascii=False, indent=2)}
+```
+<!-- PAPER_DATA_END -->
+"""
 
     payload = json.dumps(
         {
-            "title": f"📄 Papers nuevos para revisar — {time.strftime('%Y-%m-%d')}",
-            "body": "\n".join(body_lines),
+            "title": f"📄 Revisar: {paper['titulo'][:80]}",
+            "body": body,
             "labels": ["papers-borrador"],
         }
     ).encode()
@@ -183,7 +194,6 @@ def create_github_issue(drafts):
 
 def main():
     seen_pmids = set()
-    drafts = []
 
     for term in SEARCH_TERMS:
         try:
@@ -191,40 +201,38 @@ def main():
         except Exception as e:
             print(f"Error buscando '{term}': {e}")
             continue
-
         for pmid in ids:
             if pmid in seen_pmids:
                 continue
             seen_pmids.add(pmid)
             try:
                 article = pubmed_summary(pmid)
-                drafts.append(draft_with_claude(article))
+                paper = draft_with_claude(article)
+                create_issue_for_paper(paper)
             except Exception as e:
                 print(f"Error procesando PMID {pmid}: {e}")
-            time.sleep(0.5)  # respetar rate limits de PubMed
+            time.sleep(0.5)
 
-    # Búsqueda por autor: plazo más amplio (30 días) porque publican con
-    # menos frecuencia que "todo lo nuevo sobre LCA en general".
     for author_term in AUTHOR_SEARCHES:
         try:
             ids = pubmed_search(author_term, days_back=30)
         except Exception as e:
             print(f"Error buscando autor '{author_term}': {e}")
             continue
-
         for pmid in ids:
             if pmid in seen_pmids:
                 continue
             seen_pmids.add(pmid)
             try:
                 article = pubmed_summary(pmid)
-                article["fuente"] = f"Autor seguido: {author_term}"
-                drafts.append(draft_with_claude(article))
+                paper = draft_with_claude(article)
+                create_issue_for_paper(paper, fuente_autor=author_term)
             except Exception as e:
                 print(f"Error procesando PMID {pmid}: {e}")
             time.sleep(0.5)
 
-    create_github_issue(drafts)
+    if not seen_pmids:
+        print("Sin papers nuevos esta semana.")
 
 
 if __name__ == "__main__":
