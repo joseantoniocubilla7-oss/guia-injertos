@@ -393,7 +393,7 @@ const PAPERS = [
     nuevo: true,
     resumen: "Metaanálisis con Camilo Helito como coautor: la aumentación con cinta de sutura sobre injerto de isquiotibiales muestra menor tasa de falla que la técnica sin aumentar, con tasas de complicación similares.",
   },
-];
+: // AGENTE: agregar nuevos papers arriba de esta línea];
 
 function Sidebar({ view, setView, mobileOpen, setMobileOpen }) {
   const items = [
